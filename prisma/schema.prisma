@@ -7,20 +7,122 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ------------------------------------------------------
+// 1. USER MODEL (Fondasi Starter Kit Auth)
+// ------------------------------------------------------
 model User {
-  id                   Int       @id @default(autoincrement())
-  name                 String    @db.VarChar(100)
-  email                String    @unique @db.VarChar(100)
-  password             String?   @db.VarChar(255) // Diubah jadi optional
-  googleId             String?   @unique @map("google_id") @db.VarChar(255)
-  avatar               String?   @db.VarChar(500)
-  isVerified           Boolean   @default(false) @map("is_verified")
-  otpCode              String?   @map("otp_code") @db.VarChar(10)
-  otpExpires           DateTime? @map("otp_expires")
-  resetPasswordToken   String?   @map("reset_password_token") @db.VarChar(255)
-  resetPasswordExpires DateTime? @map("reset_password_expires")
-  createdAt            DateTime  @default(now()) @map("created_at")
-  updatedAt            DateTime  @updatedAt @map("updated_at")
+  id                   Int           @id @default(autoincrement())
+  name                 String        @db.VarChar(100)
+  email                String        @unique @db.VarChar(100)
+  password             String?       @db.VarChar(255)
+  googleId             String?       @unique @map("google_id") @db.VarChar(255)
+  avatar               String?       @db.VarChar(500)
+  isVerified           Boolean       @default(false) @map("is_verified")
+  otpCode              String?       @map("otp_code") @db.VarChar(10)
+  otpExpires           DateTime?     @map("otp_expires")
+  resetPasswordToken   String?       @map("reset_password_token") @db.VarChar(255)
+  resetPasswordExpires DateTime?     @map("reset_password_expires")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+
+  // Relasi Moneta Features
+  wallets              Wallet[]
+  categories           Category[]
+  transactions         Transaction[]
+  budgets              Budget[]
 
   @@map("users")
+}
+
+// ------------------------------------------------------
+// 2. WALLET / ACCOUNT MODEL (Cash, Bank, E-Wallet, dll)
+// ------------------------------------------------------
+model Wallet {
+  id           Int           @id @default(autoincrement())
+  userId       Int           @map("user_id")
+  name         String        @db.VarChar(100) // Contoh: Bank BCA, Cash, Gopay
+  type         WalletType    @default(CASH)   // CASH, BANK, E_WALLET, INVESTMENT
+  balance      Decimal       @default(0.00) @db.Decimal(15, 2)
+  color        String?       @default("#0f172a") @db.VarChar(20) // Warna badge di UI
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@map("wallets")
+}
+
+enum WalletType {
+  CASH
+  BANK
+  E_WALLET
+  INVESTMENT
+  OTHER
+}
+
+// ------------------------------------------------------
+// 3. CATEGORY MODEL (Makanan, Gaji, Transport, dll)
+// ------------------------------------------------------
+model Category {
+  id           Int             @id @default(autoincrement())
+  userId       Int?            @map("user_id") // Nullable: Jika NULL = Kategori Default Sistem, Jika terisi = Kategori Custom User
+  name         String          @db.VarChar(100)
+  type         TransactionType // INCOME atau EXPENSE
+  icon         String?         @db.VarChar(50)  // Nama ikon (misal: 'utensils', 'car', 'wallet')
+  color        String?         @default("#64748b") @db.VarChar(20)
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  user         User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@map("categories")
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+// ------------------------------------------------------
+// 4. TRANSACTION MODEL (Pencatatan Keuangan)
+// ------------------------------------------------------
+model Transaction {
+  id          Int             @id @default(autoincrement())
+  userId      Int             @map("user_id")
+  walletId    Int             @map("wallet_id")
+  categoryId  Int             @map("category_id")
+  amount      Decimal         @db.Decimal(15, 2)
+  type        TransactionType // INCOME atau EXPENSE
+  date        DateTime        @default(now())
+  description String?         @db.VarChar(255)
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet      Wallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  category    Category        @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+}
+
+// ------------------------------------------------------
+// 5. BUDGET MODEL (Target Batas Pengeluaran Bulanan)
+// ------------------------------------------------------
+model Budget {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  categoryId  Int      @map("category_id")
+  limitAmount Decimal  @db.Decimal(15, 2)
+  month       Int      // 1 - 12
+  year        Int      // Contoh: 2026
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, month, year]) // 1 user hanya punya 1 target budget per kategori per bulan
+  @@map("budgets")
 }

@@ -4,6 +4,11 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
+import walletRoutes from './routes/walletRoutes.js';
+import transactionRoutes from './routes/transactionRoutes.js';
+import categoryRoutes from './routes/categoryRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js';
+import budgetRoutes from './routes/budgetRoutes.js';
 
 dotenv.config();
 
@@ -55,6 +60,11 @@ app.get('/', (req: Request, res: Response) => {
 // 5. API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api', userRoutes);
+app.use('/api/wallets', walletRoutes)
+app.use('/api/categories', categoryRoutes);
+app.use('/api/transactions', transactionRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/budgets', budgetRoutes);
 
 // 6. 404 Handler untuk Route Tidak Ditemukan
 app.use((req: Request, res: Response) => {
