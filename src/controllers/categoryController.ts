@@ -84,29 +84,52 @@ export const createCategory = async (req: Request, res: Response): Promise<void>
 export const updateCategory = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { id } = req.params;
-  const { name, type, icon, color } = req.body;
+  const { name, color, icon, type } = req.body;
 
   try {
-    const existingCat = await prisma.category.findFirst({
+    // 1. Cari data kategori sebelum diubah
+    const oldCategory = await prisma.category.findFirst({
       where: { id: Number(id), userId },
     });
 
-    if (!existingCat) {
+    if (!oldCategory) {
       res.status(404).json({ success: false, message: 'Kategori tidak ditemukan' });
       return;
     }
 
+    // 2. Update tabel Category
     const updatedCategory = await prisma.category.update({
       where: { id: Number(id) },
       data: {
-        name: name || existingCat.name,
-        type: type ? (String(type).toUpperCase() as any) : existingCat.type,
-        icon: icon || existingCat.icon,
-        color: color || existingCat.color,
+        name,
+        color,
+        icon,
+        type: type ? (String(type).toUpperCase() as any) : undefined,
       },
     });
 
-    res.status(200).json({ success: true, data: updatedCategory });
+    // 3. SINKRONISASI OTOMATIS:
+    // Update semua transaksi yang terikat dengan ID kategori ini
+    // ATAU yang deskripsinya masih menggunakan nama kategori lama
+    await prisma.transaction.updateMany({
+      where: {
+        userId,
+        OR: [
+          { categoryId: Number(id) },
+          { description: oldCategory.name },
+        ],
+      },
+      data: {
+        categoryId: Number(id),
+        description: name, // Mengubah teks deskripsi ke nama kategori baru
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Kategori dan seluruh transaksi terkait berhasil diperbarui',
+      data: updatedCategory,
+    });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

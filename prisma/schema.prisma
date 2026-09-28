@@ -57,6 +57,7 @@ enum WalletType {
   CASH
   BANK
   E_WALLET
+  E_MONEY
   INVESTMENT
   OTHER
 }

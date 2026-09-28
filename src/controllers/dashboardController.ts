@@ -17,7 +17,12 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
     });
     const totalNetWorth = Number(walletAggregate._sum.balance || 0);
 
-    // 2. Ambil seluruh transaksi user
+    // 2. Ambil Kategori Aktif User
+    const userCategories = await prisma.category.findMany({
+      where: { userId },
+    });
+
+    // 3. Ambil Seluruh Transaksi User
     const allTransactions = await prisma.transaction.findMany({
       where: { userId },
       include: {
@@ -46,14 +51,12 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
       const typeStr = String(tx.type || '').trim().toUpperCase();
       const amountNum = Number(tx.amount || 0);
 
-      // Prioritas penamaan kategori
+      // Ambil nama & warna kategori (dengan fallback ke deskripsi jika categoryId null)
       const catName =
         tx.category?.name ||
-        (tx.description && tx.description.trim() !== '' ? tx.description : null) ||
-        'Lain-lain';
-
-      const mapKey = tx.categoryId ? String(tx.categoryId) : catName.toLowerCase().replace(/\s+/g, '-');
-      const catColor = tx.category?.color || '';
+        (tx.description && tx.description.trim() !== '' ? tx.description : 'Lain-lain');
+      const catColor = tx.category?.color || '#64748b';
+      const mapKey = tx.category?.id ? String(tx.category.id) : catName.toLowerCase().trim();
 
       if (typeStr === 'INCOME' || typeStr.includes('INCOME')) {
         totalIncome += amountNum;
@@ -70,9 +73,6 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
       }
     });
 
-    const expenseList = Object.values(expenseMap);
-    const incomeList = Object.values(incomeMap);
-
     res.status(200).json({
       success: true,
       data: {
@@ -83,9 +83,9 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
           expense: totalExpense,
           netSavings: totalIncome - totalExpense,
         },
-        expenseCategoryBreakdown: expenseList,
-        incomeCategoryBreakdown: incomeList,
-        recentTransactions: allTransactions.slice(0, 3),
+        expenseCategoryBreakdown: Object.values(expenseMap),
+        incomeCategoryBreakdown: Object.values(incomeMap),
+        recentTransactions: allTransactions.slice(0, 5),
       },
     });
   } catch (error: any) {
