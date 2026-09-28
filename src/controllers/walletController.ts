@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../config/db.js';
 
-// GET ALL WALLETS (For logged in user)
+// GET ALL WALLETS
 export const getWallets = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
 
@@ -23,7 +23,7 @@ export const createWallet = async (req: Request, res: Response): Promise<void> =
   const { name, type, balance, color } = req.body;
 
   if (!name || balance === undefined) {
-    res.status(400).json({ success: false, message: 'Wallet name and balance are required' });
+    res.status(400).json({ success: false, message: 'Nama dompet dan saldo awal wajib diisi' });
     return;
   }
 
@@ -38,7 +38,7 @@ export const createWallet = async (req: Request, res: Response): Promise<void> =
       },
     });
 
-    res.status(201).json({ success: true, message: 'Wallet created successfully', data: wallet });
+    res.status(201).json({ success: true, message: 'Dompet berhasil dibuat', data: wallet });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -48,29 +48,29 @@ export const createWallet = async (req: Request, res: Response): Promise<void> =
 export const updateWallet = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { id } = req.params;
-  const { name, type, balance, color } = req.body;
+  const { name, type, color, balance } = req.body;
 
   try {
-    const wallet = await prisma.wallet.findFirst({
+    const existingWallet = await prisma.wallet.findFirst({
       where: { id: Number(id), userId },
     });
 
-    if (!wallet) {
-      res.status(404).json({ success: false, message: 'Wallet not found' });
+    if (!existingWallet) {
+      res.status(404).json({ success: false, message: 'Dompet tidak ditemukan' });
       return;
     }
 
     const updated = await prisma.wallet.update({
       where: { id: Number(id) },
       data: {
-        name: name || wallet.name,
-        type: type || wallet.type,
-        balance: balance !== undefined ? parseFloat(balance) : wallet.balance,
-        color: color || wallet.color,
+        name: name || existingWallet.name,
+        type: type || existingWallet.type,
+        color: color || existingWallet.color,
+        balance: balance !== undefined ? parseFloat(balance) : existingWallet.balance,
       },
     });
 
-    res.status(200).json({ success: true, message: 'Wallet updated', data: updated });
+    res.status(200).json({ success: true, message: 'Dompet berhasil diperbarui', data: updated });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -82,18 +82,28 @@ export const deleteWallet = async (req: Request, res: Response): Promise<void> =
   const { id } = req.params;
 
   try {
-    const wallet = await prisma.wallet.findFirst({
+    const existingWallet = await prisma.wallet.findFirst({
       where: { id: Number(id), userId },
     });
 
-    if (!wallet) {
-      res.status(404).json({ success: false, message: 'Wallet not found' });
+    if (!existingWallet) {
+      res.status(404).json({ success: false, message: 'Dompet tidak ditemukan' });
       return;
     }
 
-    await prisma.wallet.delete({ where: { id: Number(id) } });
+    await prisma.$transaction(async (tx) => {
+      // Hapus seluruh transaksi di dompet ini
+      await tx.transaction.deleteMany({
+        where: { walletId: Number(id) },
+      });
 
-    res.status(200).json({ success: true, message: 'Wallet deleted successfully' });
+      // Hapus dompet
+      await tx.wallet.delete({
+        where: { id: Number(id) },
+      });
+    });
+
+    res.status(200).json({ success: true, message: 'Dompet beserta seluruh riwayatnya berhasil dihapus' });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
