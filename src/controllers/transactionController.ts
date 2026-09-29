@@ -37,7 +37,8 @@ export const getTransactions = async (req: Request, res: Response): Promise<void
 // 2. CREATE TRANSACTION
 export const createTransaction = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
-  const { walletId, categoryId, amount, type, description, date } = req.body;
+  // BACA notes DAN description SEKALIGUS
+  const { walletId, categoryId, amount, type, description, notes, date } = req.body;
 
   if (!walletId || !amount || !type) {
     res.status(400).json({
@@ -54,6 +55,8 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
   }
 
   const txType = String(type).toUpperCase();
+  // Catatan bisa dikirim lewat `notes` atau `description` dari frontend
+  const noteText = notes || description || null;
 
   try {
     const result = await prisma.$transaction(async (tx) => {
@@ -70,7 +73,7 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
           categoryId: categoryId ? Number(categoryId) : (null as any),
           amount: parsedAmount,
           type: txType as any,
-          description: description || null,
+          description: notes || description || null,
           date: date ? new Date(date) : new Date(),
         },
         include: {
@@ -103,7 +106,7 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
 export const updateTransaction = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { id } = req.params;
-  const { walletId, categoryId, amount, type, description, date } = req.body;
+  const { walletId, categoryId, amount, type, description, notes, date } = req.body;
 
   try {
     const updatedResult = await prisma.$transaction(async (tx) => {
@@ -119,6 +122,9 @@ export const updateTransaction = async (req: Request, res: Response): Promise<vo
       const newWalletId = walletId ? Number(walletId) : oldWalletId;
       const oldType = String(oldTx.type).toUpperCase();
       const newType = type ? String(type).toUpperCase() : oldType;
+
+      // Catatan baru
+      const noteText = notes !== undefined ? notes : (description !== undefined ? description : oldTx.description);
 
       // Rollback Saldo Dompet Lama
       const rollbackAmount = oldType === 'INCOME' ? -oldAmount : oldAmount;
@@ -142,7 +148,7 @@ export const updateTransaction = async (req: Request, res: Response): Promise<vo
           categoryId: categoryId !== undefined ? (categoryId ? Number(categoryId) : (null as any)) : oldTx.categoryId,
           amount: newAmount,
           type: newType as any,
-          description: description !== undefined ? description : oldTx.description,
+          description: notes !== undefined ? notes : (description !== undefined ? description : oldTx.description),
           date: date ? new Date(date) : oldTx.date,
         },
         include: {
