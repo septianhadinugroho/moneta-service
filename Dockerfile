@@ -11,8 +11,7 @@ RUN npm install --legacy-peer-deps --ignore-scripts
 COPY . .
 
 RUN npx prisma generate
-# Tambahkan baris ini untuk memaksa Prisma membuat tabel di database secara otomatis
-RUN npx prisma db push
+# (HAPUS baris RUN npx prisma db push dari sini)
 
 RUN npm run build
 
