@@ -1,22 +1,20 @@
-# Gunakan Node.js LTS
-FROM node:20-alpine
+# 1. Gunakan Node.js versi 22 (sesuai kebutuhan package Google terbaru)
+FROM node:22-alpine
 
 WORKDIR /app
 
-# Salin package json
+# 2. Salin package.json terlebih dahulu
 COPY package*.json ./
 
-# Instal semua dependencies (termasuk devDependencies agar tsc dan prisma tersedia saat build)
-RUN npm install
+# 3. Instal dependencies
+RUN npm install --legacy-peer-deps
 
-# Salin seluruh sisa file project
+# 4. Salin seluruh sisa file project (termasuk folder prisma dan src) SETELAH npm install
 COPY . .
 
-# Jalankan build script (generate prisma & compile typescript ke folder dist)
+# 5. Jalankan build (karena file schema sudah ada di sini, prisma generate akan aman)
 RUN npm run build
 
-# Ekspos port backend (sesuaikan dengan port express-mu, misal 5000)
 EXPOSE 3000
 
-# Jalankan aplikasi dari hasil build (sesuai script "start": "node dist/app.js")
 CMD ["npm", "run", "start"]
