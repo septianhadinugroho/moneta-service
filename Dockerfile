@@ -1,18 +1,17 @@
-# 1. Gunakan Node.js versi 22 (sesuai kebutuhan package Google terbaru)
 FROM node:22-alpine
 
 WORKDIR /app
 
-# 2. Salin package.json terlebih dahulu
 COPY package*.json ./
 
-# 3. Instal dependencies
-RUN npm install --legacy-peer-deps
+# Tambahkan --ignore-scripts agar postinstall (prisma generate) tidak jalan duluan
+RUN npm install --legacy-peer-deps --ignore-scripts
 
-# 4. Salin seluruh sisa file project (termasuk folder prisma dan src) SETELAH npm install
+# Salin seluruh sisa file project (termasuk folder prisma dan src)
 COPY . .
 
-# 5. Jalankan build (karena file schema sudah ada di sini, prisma generate akan aman)
+# Jalankan prisma generate dan build TypeScript secara manual di sini
+RUN npx prisma generate
 RUN npm run build
 
 EXPOSE 3000
