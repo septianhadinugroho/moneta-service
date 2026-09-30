@@ -76,14 +76,15 @@ export const updateWallet = async (req: Request, res: Response): Promise<void> =
   }
 };
 
-// DELETE WALLET
+// DELETE WALLET (Cascade Delete Wallet + Transaksinya)
 export const deleteWallet = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { id } = req.params;
+  const walletId = Number(id);
 
   try {
     const existingWallet = await prisma.wallet.findFirst({
-      where: { id: Number(id), userId },
+      where: { id: walletId, userId },
     });
 
     if (!existingWallet) {
@@ -92,18 +93,18 @@ export const deleteWallet = async (req: Request, res: Response): Promise<void> =
     }
 
     await prisma.$transaction(async (tx) => {
-      // Hapus seluruh transaksi di dompet ini
+      // 1. Hapus semua transaksi yang terikat ke dompet ini
       await tx.transaction.deleteMany({
-        where: { walletId: Number(id) },
+        where: { walletId },
       });
 
-      // Hapus dompet
+      // 2. Hapus dompetnya
       await tx.wallet.delete({
-        where: { id: Number(id) },
+        where: { id: walletId },
       });
     });
 
-    res.status(200).json({ success: true, message: 'Dompet beserta seluruh riwayatnya berhasil dihapus' });
+    res.status(200).json({ success: true, message: 'Dompet dan seluruh transaksinya berhasil dihapus' });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

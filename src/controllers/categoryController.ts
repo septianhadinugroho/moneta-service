@@ -103,14 +103,15 @@ export const updateCategory = async (req: Request, res: Response): Promise<void>
   }
 };
 
-// 4. DELETE CATEGORY
+// DELETE CATEGORY (Cascade Delete Category + Transaksinya)
 export const deleteCategory = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { id } = req.params;
+  const categoryId = Number(id);
 
   try {
     const existingCat = await prisma.category.findFirst({
-      where: { id: Number(id), userId },
+      where: { id: categoryId, userId },
     });
 
     if (!existingCat) {
@@ -119,17 +120,18 @@ export const deleteCategory = async (req: Request, res: Response): Promise<void>
     }
 
     await prisma.$transaction(async (tx) => {
-      await tx.transaction.updateMany({
-        where: { categoryId: Number(id) },
-        data: { categoryId: null as any },
+      // 1. Hapus semua transaksi di kategori ini
+      await tx.transaction.deleteMany({
+        where: { categoryId },
       });
 
+      // 2. Hapus kategorinya
       await tx.category.delete({
-        where: { id: Number(id) },
+        where: { id: categoryId },
       });
     });
 
-    res.status(200).json({ success: true, message: 'Kategori berhasil dihapus' });
+    res.status(200).json({ success: true, message: 'Kategori dan seluruh transaksinya berhasil dihapus' });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

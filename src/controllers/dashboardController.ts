@@ -17,17 +17,13 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
     });
     const totalNetWorth = Number(walletAggregate._sum.balance || 0);
 
-    // 2. Ambil Kategori Aktif User
-    const userCategories = await prisma.category.findMany({
-      where: { userId },
-    });
-
-    // 3. Ambil Seluruh Transaksi User
+    // 2. Ambil Seluruh Transaksi User
     const allTransactions = await prisma.transaction.findMany({
       where: { userId },
       include: {
         category: { select: { id: true, name: true, color: true, icon: true } },
-        wallet: { select: { name: true } },
+        wallet: { select: { id: true, name: true, color: true } },
+        destinationWallet: { select: { id: true, name: true, color: true } },
       },
       orderBy: { date: 'desc' },
     });
@@ -51,25 +47,39 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
       const typeStr = String(tx.type || '').trim().toUpperCase();
       const amountNum = Number(tx.amount || 0);
 
-      // Ambil nama & warna kategori (dengan fallback ke deskripsi jika categoryId null)
+      // 🛑 ABAIKAN TIPE 'TRANSFER' DARI PEMASUKAN & PENGELUARAN
+      if (typeStr === 'TRANSFER') {
+        return;
+      }
+
+      // Ambil nama & warna kategori
       const catName =
         tx.category?.name ||
         (tx.description && tx.description.trim() !== '' ? tx.description : 'Lain-lain');
       const catColor = tx.category?.color || '#64748b';
       const mapKey = tx.category?.id ? String(tx.category.id) : catName.toLowerCase().trim();
 
-      if (typeStr === 'INCOME' || typeStr.includes('INCOME')) {
+      // EXCLUDE KATEGORI PEMINDAHAN / TRANSFER DARI CHART
+      const isTransferCategory =
+        catName.toLowerCase().includes('pemindahan') ||
+        catName.toLowerCase().includes('transfer');
+
+      if (typeStr === 'INCOME') {
         totalIncome += amountNum;
-        if (!incomeMap[mapKey]) {
-          incomeMap[mapKey] = { categoryId: mapKey, categoryName: catName, color: catColor, totalAmount: 0 };
+        if (!isTransferCategory) {
+          if (!incomeMap[mapKey]) {
+            incomeMap[mapKey] = { categoryId: mapKey, categoryName: catName, color: catColor, totalAmount: 0 };
+          }
+          incomeMap[mapKey].totalAmount += amountNum;
         }
-        incomeMap[mapKey].totalAmount += amountNum;
-      } else {
+      } else if (typeStr === 'EXPENSE') {
         totalExpense += amountNum;
-        if (!expenseMap[mapKey]) {
-          expenseMap[mapKey] = { categoryId: mapKey, categoryName: catName, color: catColor, totalAmount: 0 };
+        if (!isTransferCategory) {
+          if (!expenseMap[mapKey]) {
+            expenseMap[mapKey] = { categoryId: mapKey, categoryName: catName, color: catColor, totalAmount: 0 };
+          }
+          expenseMap[mapKey].totalAmount += amountNum;
         }
-        expenseMap[mapKey].totalAmount += amountNum;
       }
     });
 

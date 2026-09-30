@@ -22,8 +22,9 @@ export const getTransactions = async (req: Request, res: Response): Promise<void
       where: whereCondition,
       include: {
         wallet: { select: { id: true, name: true, color: true } },
+        ...(prisma as any).transaction.fields?.destinationWalletId ? { destinationWallet: { select: { id: true, name: true, color: true } } } : {},
         category: { select: { id: true, name: true, icon: true, color: true, type: true } },
-      },
+      } as any,
       orderBy: { date: 'desc' },
       take: Number(limit),
     });
@@ -34,16 +35,15 @@ export const getTransactions = async (req: Request, res: Response): Promise<void
   }
 };
 
-// 2. CREATE TRANSACTION
+// 2. CREATE TRANSACTION (INCOME, EXPENSE, & TRANSFER)
 export const createTransaction = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
-  // BACA notes DAN description SEKALIGUS
-  const { walletId, categoryId, amount, type, description, notes, date } = req.body;
+  const { walletId, destinationWalletId, categoryId, amount, type, description, notes, date } = req.body;
 
   if (!walletId || !amount || !type) {
     res.status(400).json({
       success: false,
-      message: 'Wallet ID, Amount, dan Type (INCOME/EXPENSE) wajib diisi',
+      message: 'Wallet ID, Amount, dan Type wajib diisi',
     });
     return;
   }
@@ -55,7 +55,6 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
   }
 
   const txType = String(type).toUpperCase();
-  // Catatan bisa dikirim lewat `notes` atau `description` dari frontend
   const noteText = notes || description || null;
 
   try {
@@ -64,32 +63,59 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
         where: { id: Number(walletId), userId },
       });
 
-      if (!wallet) throw new Error('Dompet tidak ditemukan');
+      if (!wallet) throw new Error('Dompet asal tidak ditemukan');
 
-      const newTransaction = await tx.transaction.create({
-        data: {
-          userId,
-          walletId: Number(walletId),
-          categoryId: categoryId ? Number(categoryId) : (null as any),
-          amount: parsedAmount,
-          type: txType as any,
-          description: notes || description || null,
-          date: date ? new Date(date) : new Date(),
-        },
+      // HANDLER TIPE TRANSFER
+      if (txType === 'TRANSFER') {
+        if (!destinationWalletId) throw new Error('Dompet tujuan wajib dipilih');
+        if (Number(walletId) === Number(destinationWalletId)) {
+          throw new Error('Dompet asal dan tujuan tidak boleh sama');
+        }
+
+        const destWallet = await tx.wallet.findFirst({
+          where: { id: Number(destinationWalletId), userId },
+        });
+
+        if (!destWallet) throw new Error('Dompet tujuan tidak ditemukan');
+
+        // Decrement Asal, Increment Tujuan
+        await tx.wallet.update({
+          where: { id: Number(walletId) },
+          data: { balance: { decrement: parsedAmount } },
+        });
+
+        await tx.wallet.update({
+          where: { id: Number(destinationWalletId) },
+          data: { balance: { increment: parsedAmount } },
+        });
+      } else {
+        // HANDLER INCOME / EXPENSE
+        const balanceChange = txType === 'INCOME' ? parsedAmount : -parsedAmount;
+        await tx.wallet.update({
+          where: { id: Number(walletId) },
+          data: { balance: { increment: balanceChange } },
+        });
+      }
+
+      // Create Record Transaksi
+      const transactionData: any = {
+        userId,
+        walletId: Number(walletId),
+        destinationWalletId: txType === 'TRANSFER' && destinationWalletId ? Number(destinationWalletId) : null,
+        categoryId: txType === 'TRANSFER' ? null : (categoryId ? Number(categoryId) : null),
+        amount: parsedAmount,
+        type: txType as any,
+        description: noteText,
+        date: date ? new Date(date) : new Date(),
+      };
+
+      return await tx.transaction.create({
+        data: transactionData,
         include: {
           wallet: { select: { id: true, name: true } },
           category: { select: { id: true, name: true, icon: true } },
-        },
+        } as any,
       });
-
-      // Update Saldo Wallet
-      const balanceChange = txType === 'INCOME' ? parsedAmount : -parsedAmount;
-      await tx.wallet.update({
-        where: { id: Number(walletId) },
-        data: { balance: { increment: balanceChange } },
-      });
-
-      return newTransaction;
     });
 
     res.status(201).json({
@@ -106,55 +132,85 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
 export const updateTransaction = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { id } = req.params;
-  const { walletId, categoryId, amount, type, description, notes, date } = req.body;
+  const { walletId, destinationWalletId, categoryId, amount, type, description, notes, date } = req.body;
 
   try {
     const updatedResult = await prisma.$transaction(async (tx) => {
-      const oldTx = await tx.transaction.findFirst({
+      const oldTx: any = await tx.transaction.findFirst({
         where: { id: Number(id), userId },
       });
 
       if (!oldTx) throw new Error('Transaksi tidak ditemukan');
 
       const oldAmount = Number(oldTx.amount);
-      const newAmount = amount !== undefined ? parseFloat(amount) : oldAmount;
-      const oldWalletId = oldTx.walletId;
-      const newWalletId = walletId ? Number(walletId) : oldWalletId;
       const oldType = String(oldTx.type).toUpperCase();
+      const newAmount = amount !== undefined ? parseFloat(amount) : oldAmount;
       const newType = type ? String(type).toUpperCase() : oldType;
+      const newWalletId = walletId ? Number(walletId) : oldTx.walletId;
+      const newDestWalletId = destinationWalletId !== undefined ? (destinationWalletId ? Number(destinationWalletId) : null) : oldTx.destinationWalletId;
 
-      // Catatan baru
+      // STEP A: ROLLBACK SALDO SEBELUMNYA
+      if (oldType === 'TRANSFER') {
+        await tx.wallet.update({
+          where: { id: oldTx.walletId },
+          data: { balance: { increment: oldAmount } },
+        });
+        if (oldTx.destinationWalletId) {
+          await tx.wallet.update({
+            where: { id: oldTx.destinationWalletId },
+            data: { balance: { decrement: oldAmount } },
+          });
+        }
+      } else {
+        const rollbackAmount = oldType === 'INCOME' ? -oldAmount : oldAmount;
+        await tx.wallet.update({
+          where: { id: oldTx.walletId },
+          data: { balance: { increment: rollbackAmount } },
+        });
+      }
+
+      // STEP B: APPLY SALDO BARU
+      if (newType === 'TRANSFER') {
+        if (!newDestWalletId) throw new Error('Dompet tujuan wajib dipilih');
+        if (newWalletId === newDestWalletId) throw new Error('Dompet asal dan tujuan tidak boleh sama');
+
+        await tx.wallet.update({
+          where: { id: newWalletId },
+          data: { balance: { decrement: newAmount } },
+        });
+
+        await tx.wallet.update({
+          where: { id: newDestWalletId },
+          data: { balance: { increment: newAmount } },
+        });
+      } else {
+        const newBalanceChange = newType === 'INCOME' ? newAmount : -newAmount;
+        await tx.wallet.update({
+          where: { id: newWalletId },
+          data: { balance: { increment: newBalanceChange } },
+        });
+      }
+
+      // STEP C: UPDATE RECORD
       const noteText = notes !== undefined ? notes : (description !== undefined ? description : oldTx.description);
 
-      // Rollback Saldo Dompet Lama
-      const rollbackAmount = oldType === 'INCOME' ? -oldAmount : oldAmount;
-      await tx.wallet.update({
-        where: { id: oldWalletId },
-        data: { balance: { increment: rollbackAmount } },
-      });
+      const updateData: any = {
+        walletId: newWalletId,
+        destinationWalletId: newType === 'TRANSFER' ? newDestWalletId : null,
+        categoryId: newType === 'TRANSFER' ? null : (categoryId !== undefined ? (categoryId ? Number(categoryId) : null) : oldTx.categoryId),
+        amount: newAmount,
+        type: newType as any,
+        description: noteText,
+        date: date ? new Date(date) : oldTx.date,
+      };
 
-      // Terapkan Perubahan Saldo ke Dompet Baru
-      const newBalanceChange = newType === 'INCOME' ? newAmount : -newAmount;
-      await tx.wallet.update({
-        where: { id: newWalletId },
-        data: { balance: { increment: newBalanceChange } },
-      });
-
-      // Update Data Transaksi
       return await tx.transaction.update({
         where: { id: Number(id) },
-        data: {
-          walletId: newWalletId,
-          categoryId: categoryId !== undefined ? (categoryId ? Number(categoryId) : (null as any)) : oldTx.categoryId,
-          amount: newAmount,
-          type: newType as any,
-          description: notes !== undefined ? notes : (description !== undefined ? description : oldTx.description),
-          date: date ? new Date(date) : oldTx.date,
-        },
+        data: updateData,
         include: {
           wallet: { select: { id: true, name: true } },
           category: { select: { id: true, name: true, icon: true } },
-        },
+        } as any,
       });
     });
 
@@ -175,19 +231,34 @@ export const deleteTransaction = async (req: Request, res: Response): Promise<vo
 
   try {
     await prisma.$transaction(async (tx) => {
-      const transaction = await tx.transaction.findFirst({
+      const transaction: any = await tx.transaction.findFirst({
         where: { id: Number(id), userId },
       });
 
       if (!transaction) throw new Error('Transaksi tidak ditemukan');
 
       const parsedAmount = Number(transaction.amount);
-      const balanceRollback = String(transaction.type).toUpperCase() === 'INCOME' ? -parsedAmount : parsedAmount;
+      const txType = String(transaction.type).toUpperCase();
 
-      await tx.wallet.update({
-        where: { id: transaction.walletId },
-        data: { balance: { increment: balanceRollback } },
-      });
+      if (txType === 'TRANSFER') {
+        await tx.wallet.update({
+          where: { id: transaction.walletId },
+          data: { balance: { increment: parsedAmount } },
+        });
+
+        if (transaction.destinationWalletId) {
+          await tx.wallet.update({
+            where: { id: transaction.destinationWalletId },
+            data: { balance: { decrement: parsedAmount } },
+          });
+        }
+      } else {
+        const balanceRollback = txType === 'INCOME' ? -parsedAmount : parsedAmount;
+        await tx.wallet.update({
+          where: { id: transaction.walletId },
+          data: { balance: { increment: balanceRollback } },
+        });
+      }
 
       await tx.transaction.delete({
         where: { id: Number(id) },

@@ -138,3 +138,56 @@ export const sendResetPasswordEmail = async (to: string, otpCode: string): Promi
 
   await transporter.sendMail(mailOptions);
 };
+
+export const sendReportEmail = async (
+  to: string,
+  userName: string,
+  monthName: string,
+  year: string | number,
+  pdfBuffer: Buffer,
+  filename: string
+): Promise<void> => {
+  const mailOptions = {
+    from: `"Moneta Finance" <${process.env.SMTP_USER}>`,
+    to,
+    subject: `📊 Laporan Keuangan Moneta - ${monthName} ${year}`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="id">
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f4f4f5; color: #18181b; margin: 0; padding: 0; }
+          .container { max-width: 520px; background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 32px; margin: 40px auto; }
+          .header { font-size: 18px; font-weight: 700; color: #09090b; margin-bottom: 12px; }
+          .content { font-size: 14px; color: #52525b; line-height: 1.6; margin-bottom: 24px; }
+          .badge { display: inline-block; background-color: #ecfdf5; color: #047857; font-weight: 700; font-size: 11px; padding: 4px 10px; border-radius: 6px; margin-bottom: 16px; border: 1px solid #a7f3d0; }
+          .footer { font-size: 12px; color: #a1a1aa; border-top: 1px solid #f4f4f5; padding-top: 16px; margin-top: 24px; text-align: center; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="badge">MONETA FINANCIAL REPORT</div>
+          <div class="header">Laporan Keuangan ${monthName} ${year}</div>
+          <div class="content">
+            Halo <strong>${userName}</strong>,<br/><br/>
+            Berikut terlampir dokumen laporan ringkasan transaksi dan arus kas akun Moneta kamu untuk periode <strong>${monthName} ${year}</strong> dalam format PDF.
+          </div>
+          <div class="footer">
+            Email ini dikirim otomatis oleh sistem Moneta. Harap tidak membalas email ini.
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+    attachments: [
+      {
+        filename,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ],
+  };
+
+  await transporter.sendMail(mailOptions);
+};

@@ -11,25 +11,25 @@ datasource db {
 // 1. USER MODEL (Fondasi Starter Kit Auth)
 // ------------------------------------------------------
 model User {
-  id                   Int           @id @default(autoincrement())
-  name                 String        @db.VarChar(100)
-  email                String        @unique @db.VarChar(100)
-  password             String?       @db.VarChar(255)
-  googleId             String?       @unique @map("google_id") @db.VarChar(255)
-  avatar               String?       @db.VarChar(500)
-  isVerified           Boolean       @default(false) @map("is_verified")
-  otpCode              String?       @map("otp_code") @db.VarChar(10)
-  otpExpires           DateTime?     @map("otp_expires")
-  resetPasswordToken   String?       @map("reset_password_token") @db.VarChar(255)
-  resetPasswordExpires DateTime?     @map("reset_password_expires")
-  createdAt            DateTime      @default(now()) @map("created_at")
-  updatedAt            DateTime      @updatedAt @map("updated_at")
+  id                   Int       @id @default(autoincrement())
+  name                 String    @db.VarChar(100)
+  email                String    @unique @db.VarChar(100)
+  password             String?   @db.VarChar(255)
+  googleId             String?   @unique @map("google_id") @db.VarChar(255)
+  avatar               String?   @db.VarChar(500)
+  isVerified           Boolean   @default(false) @map("is_verified")
+  otpCode              String?   @map("otp_code") @db.VarChar(10)
+  otpExpires           DateTime? @map("otp_expires")
+  resetPasswordToken   String?   @map("reset_password_token") @db.VarChar(255)
+  resetPasswordExpires DateTime? @map("reset_password_expires")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
   // Relasi Moneta Features
-  wallets              Wallet[]
-  categories           Category[]
-  transactions         Transaction[]
-  budgets              Budget[]
+  wallets      Wallet[]
+  categories   Category[]
+  transactions Transaction[]
+  budgets      Budget[]
 
   @@map("users")
 }
@@ -38,17 +38,20 @@ model User {
 // 2. WALLET / ACCOUNT MODEL (Cash, Bank, E-Wallet, dll)
 // ------------------------------------------------------
 model Wallet {
-  id           Int           @id @default(autoincrement())
-  userId       Int           @map("user_id")
-  name         String        @db.VarChar(100) // Contoh: Bank BCA, Cash, Gopay
-  type         WalletType    @default(CASH)   // CASH, BANK, E_WALLET, INVESTMENT
-  balance      Decimal       @default(0.00) @db.Decimal(15, 2)
-  color        String?       @default("#0f172a") @db.VarChar(20) // Warna badge di UI
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @updatedAt @map("updated_at")
+  id        Int        @id @default(autoincrement())
+  userId    Int        @map("user_id")
+  name      String     @db.VarChar(100)
+  type      WalletType @default(CASH)
+  balance   Decimal    @default(0.00) @db.Decimal(15, 2)
+  color     String?    @default("#0f172a") @db.VarChar(20)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Relasi Transaksi (Asal & Tujuan Transfer)
+  sourceTransactions      Transaction[] @relation("SourceWallet")
+  destinationTransactions Transaction[] @relation("DestinationWallet")
 
   @@map("wallets")
 }
@@ -66,15 +69,15 @@ enum WalletType {
 // 3. CATEGORY MODEL (Makanan, Gaji, Transport, dll)
 // ------------------------------------------------------
 model Category {
-  id           Int             @id @default(autoincrement())
-  userId       Int?            @map("user_id") // Nullable: Jika NULL = Kategori Default Sistem, Jika terisi = Kategori Custom User
-  name         String          @db.VarChar(100)
-  type         TransactionType // INCOME atau EXPENSE
-  icon         String?         @db.VarChar(50)  // Nama ikon (misal: 'utensils', 'car', 'wallet')
-  color        String?         @default("#64748b") @db.VarChar(20)
-  createdAt    DateTime        @default(now()) @map("created_at")
+  id        Int             @id @default(autoincrement())
+  userId    Int?            @map("user_id") // NULL = Kategori Default System, Terisi = Custom User
+  name      String          @db.VarChar(100)
+  type      TransactionType // INCOME atau EXPENSE
+  icon      String?         @db.VarChar(50)
+  color     String?         @default("#64748b") @db.VarChar(20)
+  createdAt DateTime        @default(now()) @map("created_at")
 
-  user         User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions Transaction[]
   budgets      Budget[]
 
@@ -84,26 +87,29 @@ model Category {
 enum TransactionType {
   INCOME
   EXPENSE
+  TRANSFER // Tambahan untuk membedakan transaksi pemindahan saldo
 }
 
 // ------------------------------------------------------
-// 4. TRANSACTION MODEL (Pencatatan Keuangan)
+// 4. TRANSACTION MODEL (Pencatatan Keuangan & Transfer)
 // ------------------------------------------------------
 model Transaction {
-  id          Int             @id @default(autoincrement())
-  userId      Int             @map("user_id")
-  walletId    Int             @map("wallet_id")
-  categoryId  Int             @map("category_id")
-  amount      Decimal         @db.Decimal(15, 2)
-  type        TransactionType // INCOME atau EXPENSE
-  date        DateTime        @default(now())
-  description String?         @db.VarChar(255)
-  createdAt   DateTime        @default(now()) @map("created_at")
-  updatedAt   DateTime        @updatedAt @map("updated_at")
+  id                  Int             @id @default(autoincrement())
+  userId              Int             @map("user_id")
+  walletId            Int             @map("wallet_id") // Dompet Asal / Dompet Utama
+  destinationWalletId Int?            @map("destination_wallet_id") // Khusus untuk TRANSFER
+  categoryId          Int?            @map("category_id") // Optional jika transaksi bertipe TRANSFER
+  amount              Decimal         @db.Decimal(15, 2)
+  type                TransactionType // INCOME, EXPENSE, atau TRANSFER
+  date                DateTime        @default(now())
+  description         String?         @db.VarChar(255)
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
 
-  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wallet      Wallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
-  category    Category        @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet            Wallet    @relation("SourceWallet", fields: [walletId], references: [id], onDelete: Cascade)
+  destinationWallet Wallet?   @relation("DestinationWallet", fields: [destinationWalletId], references: [id], onDelete: SetNull)
+  category          Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@map("transactions")
 }
@@ -115,15 +121,15 @@ model Budget {
   id          Int      @id @default(autoincrement())
   userId      Int      @map("user_id")
   categoryId  Int      @map("category_id")
-  limitAmount Decimal  @db.Decimal(15, 2)
+  limitAmount Decimal  @map("limit_amount") @db.Decimal(15, 2)
   month       Int      // 1 - 12
   year        Int      // Contoh: 2026
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, categoryId, month, year]) // 1 user hanya punya 1 target budget per kategori per bulan
+  @@unique([userId, categoryId, month, year])
   @@map("budgets")
 }
