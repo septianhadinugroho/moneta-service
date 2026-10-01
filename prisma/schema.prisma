@@ -30,6 +30,7 @@ model User {
   categories   Category[]
   transactions Transaction[]
   budgets      Budget[]
+  goals        Goal[]
 
   @@map("users")
 }
@@ -52,6 +53,9 @@ model Wallet {
   // Relasi Transaksi (Asal & Tujuan Transfer)
   sourceTransactions      Transaction[] @relation("SourceWallet")
   destinationTransactions Transaction[] @relation("DestinationWallet")
+
+  // Relasi ke Target Impian / Tabungan
+  goals                   Goal[]
 
   @@map("wallets")
 }
@@ -132,4 +136,24 @@ model Budget {
 
   @@unique([userId, categoryId, month, year])
   @@map("budgets")
+}
+
+// ------------------------------------------------------
+// 6. GOAL MODEL (Target / Impian Tabungan)
+// ------------------------------------------------------
+model Goal {
+  id           Int       @id @default(autoincrement())
+  userId       Int       @map("user_id")
+  name         String    @db.VarChar(100)
+  targetAmount Decimal   @map("target_amount") @db.Decimal(15, 2)
+  currentAmount Decimal  @default(0.00) @map("current_amount") @db.Decimal(15, 2)
+  walletId     Int?      @map("wallet_id")
+  targetDate   DateTime? @map("target_date")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet Wallet? @relation(fields: [walletId], references: [id], onDelete: SetNull)
+
+  @@map("goals")
 }

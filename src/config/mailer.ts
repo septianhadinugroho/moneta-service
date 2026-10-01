@@ -150,7 +150,7 @@ export const sendReportEmail = async (
   const mailOptions = {
     from: `"Moneta Finance" <${process.env.SMTP_USER}>`,
     to,
-    subject: `📊 Laporan Keuangan Moneta - ${monthName} ${year}`,
+    subject: `Laporan Keuangan Moneta - ${monthName} ${year}`,
     html: `
       <!DOCTYPE html>
       <html lang="id">

@@ -5,6 +5,7 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
   const userId = (req as any).user.id;
   const { month, year } = req.query;
 
+  // Pastikan mengambil waktu lokal perangkat
   const now = new Date();
   const currentMonth = month ? Number(month) : now.getMonth() + 1;
   const currentYear = year ? Number(year) : now.getFullYear();
@@ -37,29 +38,31 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
     allTransactions.forEach((tx) => {
       const rawDate = tx.date || (tx as any).transactionDate || (tx as any).createdAt;
       if (!rawDate) return;
+
       const txDate = new Date(rawDate);
+      
+      // FIX TIMEZONE: Gunakan getFullYear() & getMonth() lokal perangkat/server
+      const txMonth = txDate.getMonth() + 1;
+      const txYear = txDate.getFullYear();
 
       // Filter periode bulan dan tahun aktif
-      if (txDate.getMonth() + 1 !== currentMonth || txDate.getFullYear() !== currentYear) {
+      if (txMonth !== currentMonth || txYear !== currentYear) {
         return;
       }
 
       const typeStr = String(tx.type || '').trim().toUpperCase();
       const amountNum = Number(tx.amount || 0);
 
-      // 🛑 ABAIKAN TIPE 'TRANSFER' DARI PEMASUKAN & PENGELUARAN
       if (typeStr === 'TRANSFER') {
         return;
       }
 
-      // Ambil nama & warna kategori
       const catName =
         tx.category?.name ||
         (tx.description && tx.description.trim() !== '' ? tx.description : 'Lain-lain');
       const catColor = tx.category?.color || '#64748b';
       const mapKey = tx.category?.id ? String(tx.category.id) : catName.toLowerCase().trim();
 
-      // EXCLUDE KATEGORI PEMINDAHAN / TRANSFER DARI CHART
       const isTransferCategory =
         catName.toLowerCase().includes('pemindahan') ||
         catName.toLowerCase().includes('transfer');

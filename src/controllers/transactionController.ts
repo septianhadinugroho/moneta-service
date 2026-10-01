@@ -1,35 +1,95 @@
 import { Request, Response } from 'express';
 import prisma from '../config/db.js';
 
-// 1. GET TRANSACTIONS
+// 1. GET TRANSACTIONS (WITH SEARCH, FILTER & PAGINATION)
 export const getTransactions = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
-  const { month, year, walletId, categoryId, limit = 50 } = req.query;
+  const { 
+    month, 
+    year, 
+    walletId, 
+    categoryId, 
+    search, 
+    startDate, 
+    endDate, 
+    page = 1, 
+    limit = 10 
+  } = req.query;
 
   try {
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+    const skip = (pageNum - 1) * limitNum;
+
     const whereCondition: any = { userId };
 
-    if (walletId) whereCondition.walletId = Number(walletId);
-    if (categoryId) whereCondition.categoryId = Number(categoryId);
-
-    if (month && year) {
-      const startDate = new Date(Number(year), Number(month) - 1, 1);
-      const endDate = new Date(Number(year), Number(month), 0, 23, 59, 59);
-      whereCondition.date = { gte: startDate, lte: endDate };
+    // Filter Dompet Asal atau Tujuan
+    if (walletId) {
+      whereCondition.OR = [
+        { walletId: Number(walletId) },
+        { destinationWalletId: Number(walletId) }
+      ];
     }
 
+    // Filter Kategori
+    if (categoryId) {
+      whereCondition.categoryId = Number(categoryId);
+    }
+
+    // Filter Kata Kunci / Search (Deskripsi)
+    if (search && String(search).trim() !== '') {
+      whereCondition.description = {
+        contains: String(search).trim(),
+      };
+    }
+
+    // Filter Date Range vs Month & Year
+    if (startDate && endDate) {
+      const start = new Date(String(startDate));
+      start.setHours(0, 0, 0, 0);
+
+      const end = new Date(String(endDate));
+      end.setHours(23, 59, 59, 999);
+
+      whereCondition.date = { gte: start, lte: end };
+    } else if (month && year) {
+      const m = Number(month);
+      const y = Number(year);
+      const startOfMonth = new Date(y, m - 1, 1, 0, 0, 0, 0);
+      const endOfMonth = new Date(y, m, 0, 23, 59, 59, 999);
+
+      whereCondition.date = { gte: startOfMonth, lte: endOfMonth };
+    }
+
+    // Hitung total transaksi sesuai filter untuk pagination
+    const totalItems = await prisma.transaction.count({ where: whereCondition });
+    const totalPages = Math.ceil(totalItems / limitNum);
+
+    // Ambil daftar transaksi ter-paginate
     const transactions = await prisma.transaction.findMany({
       where: whereCondition,
       include: {
         wallet: { select: { id: true, name: true, color: true } },
-        ...(prisma as any).transaction.fields?.destinationWalletId ? { destinationWallet: { select: { id: true, name: true, color: true } } } : {},
+        ...(prisma as any).transaction.fields?.destinationWalletId 
+          ? { destinationWallet: { select: { id: true, name: true, color: true } } } 
+          : {},
         category: { select: { id: true, name: true, icon: true, color: true, type: true } },
       } as any,
       orderBy: { date: 'desc' },
-      take: Number(limit),
+      skip,
+      take: limitNum,
     });
 
-    res.status(200).json({ success: true, data: transactions });
+    res.status(200).json({
+      success: true,
+      data: transactions,
+      pagination: {
+        totalItems,
+        totalPages,
+        currentPage: pageNum,
+        limit: limitNum,
+      },
+    });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

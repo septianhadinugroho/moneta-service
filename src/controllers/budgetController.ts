@@ -42,6 +42,7 @@ export const getBudgets = async (req: Request, res: Response): Promise<void> => 
           category: budget.category,
           limitAmount: limit,
           spentAmount: spent,
+          usedAmount: spent,
           remainingAmount: limit - spent,
           percentage,
           isOverBudget: spent > limit,
