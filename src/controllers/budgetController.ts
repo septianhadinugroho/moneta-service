@@ -35,10 +35,11 @@ export const getBudgets = async (req: Request, res: Response): Promise<void> => 
 
         const spent = Number(spentAggregate._sum.amount || 0);
         const limit = Number(budget.limitAmount);
-        const percentage = Math.min(Math.round((spent / limit) * 100), 100);
+        const percentage = limit > 0 ? Math.min(Math.round((spent / limit) * 100), 100) : 0;
 
         return {
           id: budget.id,
+          categoryId: budget.categoryId,
           category: budget.category,
           limitAmount: limit,
           spentAmount: spent,
@@ -46,6 +47,8 @@ export const getBudgets = async (req: Request, res: Response): Promise<void> => 
           remainingAmount: limit - spent,
           percentage,
           isOverBudget: spent > limit,
+          month: budget.month,
+          year: budget.year,
         };
       })
     );
@@ -56,13 +59,13 @@ export const getBudgets = async (req: Request, res: Response): Promise<void> => 
   }
 };
 
-// UPSERT (Set / Update Target Budget)
+// UPSERT / CREATE BUDGET
 export const setBudget = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { categoryId, limitAmount, month, year } = req.body;
 
   if (!categoryId || limitAmount === undefined) {
-    res.status(400).json({ success: false, message: 'Category ID and Limit Amount are required' });
+    res.status(400).json({ success: false, message: 'Kategori dan nominal limit wajib diisi' });
     return;
   }
 
@@ -91,7 +94,64 @@ export const setBudget = async (req: Request, res: Response): Promise<void> => {
       },
     });
 
-    res.status(200).json({ success: true, message: 'Budget set successfully', data: budget });
+    res.status(200).json({ success: true, message: 'Anggaran berhasil disimpan', data: budget });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// UPDATE BUDGET BY ID
+export const updateBudget = async (req: Request, res: Response): Promise<void> => {
+  const userId = (req as any).user.id;
+  const { id } = req.params;
+  const { limitAmount } = req.body;
+
+  if (limitAmount === undefined || isNaN(Number(limitAmount))) {
+    res.status(400).json({ success: false, message: 'Nominal limit anggaran tidak valid' });
+    return;
+  }
+
+  try {
+    const existing = await prisma.budget.findFirst({
+      where: { id: Number(id), userId },
+    });
+
+    if (!existing) {
+      res.status(404).json({ success: false, message: 'Data anggaran tidak ditemukan' });
+      return;
+    }
+
+    const updatedBudget = await prisma.budget.update({
+      where: { id: Number(id) },
+      data: { limitAmount: parseFloat(limitAmount) },
+    });
+
+    res.status(200).json({ success: true, message: 'Anggaran berhasil diperbarui', data: updatedBudget });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// DELETE BUDGET BY ID
+export const deleteBudget = async (req: Request, res: Response): Promise<void> => {
+  const userId = (req as any).user.id;
+  const { id } = req.params;
+
+  try {
+    const existing = await prisma.budget.findFirst({
+      where: { id: Number(id), userId },
+    });
+
+    if (!existing) {
+      res.status(404).json({ success: false, message: 'Data anggaran tidak ditemukan' });
+      return;
+    }
+
+    await prisma.budget.delete({
+      where: { id: Number(id) },
+    });
+
+    res.status(200).json({ success: true, message: 'Anggaran berhasil dihapus' });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

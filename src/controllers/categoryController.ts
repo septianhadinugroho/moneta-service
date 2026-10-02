@@ -8,7 +8,12 @@ export const getCategories = async (req: Request, res: Response): Promise<void> 
 
   try {
     const categories = await prisma.category.findMany({
-      where: { userId },
+      where: {
+        OR: [
+          { userId: Number(userId) },
+          { userId: null } // Supaya kategori default bawaan sistem ikut terbaca oleh user
+        ]
+      },
       orderBy: { name: 'asc' },
     });
 
