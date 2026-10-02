@@ -5,7 +5,6 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
   const userId = (req as any).user.id;
   const { month, year } = req.query;
 
-  // Pastikan mengambil waktu lokal perangkat
   const now = new Date();
   const currentMonth = month ? Number(month) : now.getMonth() + 1;
   const currentYear = year ? Number(year) : now.getFullYear();
@@ -32,16 +31,14 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
     let totalIncome = 0;
     let totalExpense = 0;
 
-    const expenseMap: { [key: string]: { categoryId: any; categoryName: string; color: string; totalAmount: number } } = {};
-    const incomeMap: { [key: string]: { categoryId: any; categoryName: string; color: string; totalAmount: number } } = {};
+    const expenseMap: { [key: string]: { categoryId: any; categoryName: string; color: string; icon: string; totalAmount: number } } = {};
+    const incomeMap: { [key: string]: { categoryId: any; categoryName: string; color: string; icon: string; totalAmount: number } } = {};
 
     allTransactions.forEach((tx) => {
       const rawDate = tx.date || (tx as any).transactionDate || (tx as any).createdAt;
       if (!rawDate) return;
 
       const txDate = new Date(rawDate);
-      
-      // FIX TIMEZONE: Gunakan getFullYear() & getMonth() lokal perangkat/server
       const txMonth = txDate.getMonth() + 1;
       const txYear = txDate.getFullYear();
 
@@ -61,6 +58,7 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         tx.category?.name ||
         (tx.description && tx.description.trim() !== '' ? tx.description : 'Lain-lain');
       const catColor = tx.category?.color || '#64748b';
+      const catIcon = tx.category?.icon || 'Tag'; // 👈 Dapatkan ikon dari Prisma relation
       const mapKey = tx.category?.id ? String(tx.category.id) : catName.toLowerCase().trim();
 
       const isTransferCategory =
@@ -71,7 +69,13 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         totalIncome += amountNum;
         if (!isTransferCategory) {
           if (!incomeMap[mapKey]) {
-            incomeMap[mapKey] = { categoryId: mapKey, categoryName: catName, color: catColor, totalAmount: 0 };
+            incomeMap[mapKey] = { 
+              categoryId: mapKey, 
+              categoryName: catName, 
+              color: catColor, 
+              icon: catIcon, // 👈 Kirim ke response
+              totalAmount: 0 
+            };
           }
           incomeMap[mapKey].totalAmount += amountNum;
         }
@@ -79,7 +83,13 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         totalExpense += amountNum;
         if (!isTransferCategory) {
           if (!expenseMap[mapKey]) {
-            expenseMap[mapKey] = { categoryId: mapKey, categoryName: catName, color: catColor, totalAmount: 0 };
+            expenseMap[mapKey] = { 
+              categoryId: mapKey, 
+              categoryName: catName, 
+              color: catColor, 
+              icon: catIcon, // 👈 Kirim ke response
+              totalAmount: 0 
+            };
           }
           expenseMap[mapKey].totalAmount += amountNum;
         }
