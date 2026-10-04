@@ -9,16 +9,35 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
   const currentMonth = month ? Number(month) : now.getMonth() + 1;
   const currentYear = year ? Number(year) : now.getFullYear();
 
+  // Buat Rentang Tanggal Awal dan Akhir Bulan (Sesuai UTC/Local)
+  const startDate = new Date(currentYear, currentMonth - 1, 1);
+  const endDate = new Date(currentYear, currentMonth, 0, 23, 59, 59, 999);
+
   try {
-    // 1. Total Net Worth dari seluruh akun/wallet
+    // 1. Total Net Worth dari seluruh wallet user (Saldo riil saat ini)
     const walletAggregate = await prisma.wallet.aggregate({
       where: { userId },
       _sum: { balance: true },
     });
     const totalNetWorth = Number(walletAggregate._sum.balance || 0);
 
-    // 2. Ambil Seluruh Transaksi User
-    const allTransactions = await prisma.transaction.findMany({
+    // 2. Ambil Transaksi KHUSUS Bulan & Tahun Aktif untuk Ringkasan Bulanan
+    const monthlyTransactions = await prisma.transaction.findMany({
+      where: {
+        userId,
+        date: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      include: {
+        category: { select: { id: true, name: true, color: true, icon: true } },
+        wallet: { select: { id: true, name: true, color: true } },
+      },
+    });
+
+    // 3. Ambil 5 Transaksi Terakhir (Tanpa Terbatas Bulan Aktif) agar Recent Tx selalu terisi
+    const recentTransactions = await prisma.transaction.findMany({
       where: { userId },
       include: {
         category: { select: { id: true, name: true, color: true, icon: true } },
@@ -26,6 +45,7 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         destinationWallet: { select: { id: true, name: true, color: true } },
       },
       orderBy: { date: 'desc' },
+      take: 5,
     });
 
     let totalIncome = 0;
@@ -34,31 +54,16 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
     const expenseMap: { [key: string]: { categoryId: any; categoryName: string; color: string; icon: string; totalAmount: number } } = {};
     const incomeMap: { [key: string]: { categoryId: any; categoryName: string; color: string; icon: string; totalAmount: number } } = {};
 
-    allTransactions.forEach((tx) => {
-      const rawDate = tx.date || (tx as any).transactionDate || (tx as any).createdAt;
-      if (!rawDate) return;
-
-      const txDate = new Date(rawDate);
-      const txMonth = txDate.getMonth() + 1;
-      const txYear = txDate.getFullYear();
-
-      // Filter periode bulan dan tahun aktif
-      if (txMonth !== currentMonth || txYear !== currentYear) {
-        return;
-      }
-
+    monthlyTransactions.forEach((tx) => {
       const typeStr = String(tx.type || '').trim().toUpperCase();
       const amountNum = Number(tx.amount || 0);
 
-      if (typeStr === 'TRANSFER') {
-        return;
-      }
+      // Skip jika transaksi Transfer
+      if (typeStr === 'TRANSFER') return;
 
-      const catName =
-        tx.category?.name ||
-        (tx.description && tx.description.trim() !== '' ? tx.description : 'Lain-lain');
+      const catName = tx.category?.name || tx.description || 'Lain-lain';
       const catColor = tx.category?.color || '#64748b';
-      const catIcon = tx.category?.icon || 'Tag'; // 👈 Dapatkan ikon dari Prisma relation
+      const catIcon = tx.category?.icon || 'Tag';
       const mapKey = tx.category?.id ? String(tx.category.id) : catName.toLowerCase().trim();
 
       const isTransferCategory =
@@ -69,12 +74,12 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         totalIncome += amountNum;
         if (!isTransferCategory) {
           if (!incomeMap[mapKey]) {
-            incomeMap[mapKey] = { 
-              categoryId: mapKey, 
-              categoryName: catName, 
-              color: catColor, 
-              icon: catIcon, // 👈 Kirim ke response
-              totalAmount: 0 
+            incomeMap[mapKey] = {
+              categoryId: mapKey,
+              categoryName: catName,
+              color: catColor,
+              icon: catIcon,
+              totalAmount: 0,
             };
           }
           incomeMap[mapKey].totalAmount += amountNum;
@@ -83,12 +88,12 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         totalExpense += amountNum;
         if (!isTransferCategory) {
           if (!expenseMap[mapKey]) {
-            expenseMap[mapKey] = { 
-              categoryId: mapKey, 
-              categoryName: catName, 
-              color: catColor, 
-              icon: catIcon, // 👈 Kirim ke response
-              totalAmount: 0 
+            expenseMap[mapKey] = {
+              categoryId: mapKey,
+              categoryName: catName,
+              color: catColor,
+              icon: catIcon,
+              totalAmount: 0,
             };
           }
           expenseMap[mapKey].totalAmount += amountNum;
@@ -96,9 +101,16 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
       }
     });
 
+    // 4. Kirim Data User juga agar name tidak hilang di FE
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, email: true, avatar: true },
+    });
+
     res.status(200).json({
       success: true,
       data: {
+        user,
         period: { month: currentMonth, year: currentYear },
         totalNetWorth,
         monthlySummary: {
@@ -108,10 +120,11 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         },
         expenseCategoryBreakdown: Object.values(expenseMap),
         incomeCategoryBreakdown: Object.values(incomeMap),
-        recentTransactions: allTransactions.slice(0, 5),
+        recentTransactions,
       },
     });
   } catch (error: any) {
+    console.error('Error Dashboard Controller:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
