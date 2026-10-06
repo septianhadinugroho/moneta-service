@@ -26,11 +26,12 @@ model User {
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
   // Relasi Moneta Features
-  wallets      Wallet[]
-  categories   Category[]
-  transactions Transaction[]
-  budgets      Budget[]
-  goals        Goal[]
+  wallets       Wallet[]
+  categories    Category[]
+  transactions  Transaction[]
+  budgets       Budget[]
+  goals         Goal[]
+  subscriptions Subscription[]
 
   @@map("users")
 }
@@ -55,7 +56,8 @@ model Wallet {
   destinationTransactions Transaction[] @relation("DestinationWallet")
 
   // Relasi ke Target Impian / Tabungan
-  goals                   Goal[]
+  goals         Goal[]
+  subscriptions Subscription[]
 
   @@map("wallets")
 }
@@ -81,9 +83,10 @@ model Category {
   color     String?         @default("#64748b") @db.VarChar(20)
   createdAt DateTime        @default(now()) @map("created_at")
 
-  user         User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
-  budgets      Budget[]
+  user          User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
+  budgets       Budget[]
+  subscriptions Subscription[]
 
   @@map("categories")
 }
@@ -91,7 +94,7 @@ model Category {
 enum TransactionType {
   INCOME
   EXPENSE
-  TRANSFER // Tambahan untuk membedakan transaksi pemindahan saldo
+  TRANSFER
 }
 
 // ------------------------------------------------------
@@ -110,10 +113,11 @@ model Transaction {
   createdAt           DateTime        @default(now()) @map("created_at")
   updatedAt           DateTime        @updatedAt @map("updated_at")
 
-  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wallet            Wallet    @relation("SourceWallet", fields: [walletId], references: [id], onDelete: Cascade)
-  destinationWallet Wallet?   @relation("DestinationWallet", fields: [destinationWalletId], references: [id], onDelete: SetNull)
-  category          Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet              Wallet               @relation("SourceWallet", fields: [walletId], references: [id], onDelete: Cascade)
+  destinationWallet   Wallet?              @relation("DestinationWallet", fields: [destinationWalletId], references: [id], onDelete: SetNull)
+  category            Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  subscriptionPayment SubscriptionPayment?
 
   @@map("transactions")
 }
@@ -126,8 +130,8 @@ model Budget {
   userId      Int      @map("user_id")
   categoryId  Int      @map("category_id")
   limitAmount Decimal  @map("limit_amount") @db.Decimal(15, 2)
-  month       Int      // 1 - 12
-  year        Int      // Contoh: 2026
+  month       Int // 1 - 12
+  year        Int // Contoh: 2026
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -142,18 +146,71 @@ model Budget {
 // 6. GOAL MODEL (Target / Impian Tabungan)
 // ------------------------------------------------------
 model Goal {
-  id           Int       @id @default(autoincrement())
-  userId       Int       @map("user_id")
-  name         String    @db.VarChar(100)
-  targetAmount Decimal   @map("target_amount") @db.Decimal(15, 2)
-  currentAmount Decimal  @default(0.00) @map("current_amount") @db.Decimal(15, 2)
-  walletId     Int?      @map("wallet_id")
-  targetDate   DateTime? @map("target_date")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  id            Int       @id @default(autoincrement())
+  userId        Int       @map("user_id")
+  name          String    @db.VarChar(100)
+  targetAmount  Decimal   @map("target_amount") @db.Decimal(15, 2)
+  currentAmount Decimal   @default(0.00) @map("current_amount") @db.Decimal(15, 2)
+  walletId      Int?      @map("wallet_id")
+  targetDate    DateTime? @map("target_date")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet Wallet? @relation(fields: [walletId], references: [id], onDelete: SetNull)
 
   @@map("goals")
+}
+
+// ------------------------------------------------------
+// 7. SUBSCRIPTION MODEL (Tagihan Rutin & Langganan)
+// ------------------------------------------------------
+model Subscription {
+  id           Int                @id @default(autoincrement())
+  userId       Int                @map("user_id")
+  name         String             @db.VarChar(100)
+  amount       Decimal            @db.Decimal(15, 2)
+  frequency    RecurringFrequency @default(MONTHLY)
+  dueDate      Int                @map("due_date")
+  walletId     Int?               @map("wallet_id")
+  categoryId   Int?               @map("category_id")
+  status       SubscriptionStatus @default(ACTIVE)
+  reminderDays Int                @default(3) @map("reminder_days")
+  notes        String?            @db.VarChar(255)
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+
+  user     User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet   Wallet?               @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  category Category?             @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  payments SubscriptionPayment[]
+
+  @@map("subscriptions")
+}
+
+model SubscriptionPayment {
+  id             Int      @id @default(autoincrement())
+  subscriptionId Int      @map("subscription_id")
+  transactionId  Int?     @unique @map("transaction_id")
+  month          Int
+  year           Int
+  paidAt         DateTime @default(now()) @map("paid_at")
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  transaction  Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@unique([subscriptionId, month, year])
+  @@map("subscription_payments")
+}
+
+enum RecurringFrequency {
+  MONTHLY
+  YEARLY
+  WEEKLY
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
 }

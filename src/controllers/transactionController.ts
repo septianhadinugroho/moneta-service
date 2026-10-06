@@ -23,7 +23,6 @@ export const getTransactions = async (req: Request, res: Response): Promise<void
 
     const whereCondition: any = { userId };
 
-    // Filter Dompet Asal atau Tujuan
     if (walletId) {
       whereCondition.OR = [
         { walletId: Number(walletId) },
@@ -31,19 +30,16 @@ export const getTransactions = async (req: Request, res: Response): Promise<void
       ];
     }
 
-    // Filter Kategori
     if (categoryId) {
       whereCondition.categoryId = Number(categoryId);
     }
 
-    // Filter Kata Kunci / Search (Deskripsi)
     if (search && String(search).trim() !== '') {
       whereCondition.description = {
         contains: String(search).trim(),
       };
     }
 
-    // Filter Date Range vs Month & Year
     if (startDate && endDate) {
       const start = new Date(String(startDate));
       start.setHours(0, 0, 0, 0);
@@ -61,11 +57,9 @@ export const getTransactions = async (req: Request, res: Response): Promise<void
       whereCondition.date = { gte: startOfMonth, lte: endOfMonth };
     }
 
-    // Hitung total transaksi sesuai filter untuk pagination
     const totalItems = await prisma.transaction.count({ where: whereCondition });
     const totalPages = Math.ceil(totalItems / limitNum);
 
-    // Ambil daftar transaksi ter-paginate
     const transactions = await prisma.transaction.findMany({
       where: whereCondition,
       include: {
@@ -125,7 +119,6 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
 
       if (!wallet) throw new Error('Dompet asal tidak ditemukan');
 
-      // HANDLER TIPE TRANSFER
       if (txType === 'TRANSFER') {
         if (!destinationWalletId) throw new Error('Dompet tujuan wajib dipilih');
         if (Number(walletId) === Number(destinationWalletId)) {
@@ -138,7 +131,6 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
 
         if (!destWallet) throw new Error('Dompet tujuan tidak ditemukan');
 
-        // Decrement Asal, Increment Tujuan
         await tx.wallet.update({
           where: { id: Number(walletId) },
           data: { balance: { decrement: parsedAmount } },
@@ -149,7 +141,6 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
           data: { balance: { increment: parsedAmount } },
         });
       } else {
-        // HANDLER INCOME / EXPENSE
         const balanceChange = txType === 'INCOME' ? parsedAmount : -parsedAmount;
         await tx.wallet.update({
           where: { id: Number(walletId) },
@@ -157,7 +148,6 @@ export const createTransaction = async (req: Request, res: Response): Promise<vo
         });
       }
 
-      // Create Record Transaksi
       const transactionData: any = {
         userId,
         walletId: Number(walletId),
@@ -209,7 +199,6 @@ export const updateTransaction = async (req: Request, res: Response): Promise<vo
       const newWalletId = walletId ? Number(walletId) : oldTx.walletId;
       const newDestWalletId = destinationWalletId !== undefined ? (destinationWalletId ? Number(destinationWalletId) : null) : oldTx.destinationWalletId;
 
-      // STEP A: ROLLBACK SALDO SEBELUMNYA
       if (oldType === 'TRANSFER') {
         await tx.wallet.update({
           where: { id: oldTx.walletId },
@@ -229,7 +218,6 @@ export const updateTransaction = async (req: Request, res: Response): Promise<vo
         });
       }
 
-      // STEP B: APPLY SALDO BARU
       if (newType === 'TRANSFER') {
         if (!newDestWalletId) throw new Error('Dompet tujuan wajib dipilih');
         if (newWalletId === newDestWalletId) throw new Error('Dompet asal dan tujuan tidak boleh sama');
@@ -251,7 +239,6 @@ export const updateTransaction = async (req: Request, res: Response): Promise<vo
         });
       }
 
-      // STEP C: UPDATE RECORD
       const noteText = notes !== undefined ? notes : (description !== undefined ? description : oldTx.description);
 
       const updateData: any = {
@@ -284,15 +271,16 @@ export const updateTransaction = async (req: Request, res: Response): Promise<vo
   }
 };
 
-// 4. DELETE TRANSACTION
+// 4. DELETE TRANSACTION (DENGAN REVERSE STATUS TAGIHAN)
 export const deleteTransaction = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { id } = req.params;
+  const txId = Number(id);
 
   try {
     await prisma.$transaction(async (tx) => {
       const transaction: any = await tx.transaction.findFirst({
-        where: { id: Number(id), userId },
+        where: { id: txId, userId },
       });
 
       if (!transaction) throw new Error('Transaksi tidak ditemukan');
@@ -300,6 +288,7 @@ export const deleteTransaction = async (req: Request, res: Response): Promise<vo
       const parsedAmount = Number(transaction.amount);
       const txType = String(transaction.type).toUpperCase();
 
+      // STEP 1: ROLLBACK SALDO DOMPET
       if (txType === 'TRANSFER') {
         await tx.wallet.update({
           where: { id: transaction.walletId },
@@ -320,12 +309,24 @@ export const deleteTransaction = async (req: Request, res: Response): Promise<vo
         });
       }
 
+      // STEP 2: SINKRONISASI TAGIHAN (JIKA ADA RECORD PEMBAYARAN TERKAIT)
+      // Hapus status lunas di subscriptionPayment jika transaksi ini dibuat dari bayar tagihan
+      if ((tx as any).subscriptionPayment) {
+        await (tx as any).subscriptionPayment.deleteMany({
+          where: { transactionId: txId },
+        });
+      }
+
+      // STEP 3: HAPUS TRANSAKSI
       await tx.transaction.delete({
-        where: { id: Number(id) },
+        where: { id: txId },
       });
     });
 
-    res.status(200).json({ success: true, message: 'Transaksi berhasil dihapus & saldo dikembalikan' });
+    res.status(200).json({ 
+      success: true, 
+      message: 'Transaksi berhasil dihapus & status tagihan dikembalikan' 
+    });
   } catch (error: any) {
     res.status(400).json({ success: false, message: error.message });
   }
