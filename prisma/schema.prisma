@@ -32,6 +32,7 @@ model User {
   budgets       Budget[]
   goals         Goal[]
   subscriptions Subscription[]
+  debts         Debt[]
 
   @@map("users")
 }
@@ -58,6 +59,8 @@ model Wallet {
   // Relasi ke Target Impian / Tabungan
   goals         Goal[]
   subscriptions Subscription[]
+  debts         Debt[]
+  debtPayments  DebtPayment[]
 
   @@map("wallets")
 }
@@ -213,4 +216,53 @@ enum SubscriptionStatus {
   ACTIVE
   PAUSED
   CANCELLED
+}
+
+// ------------------------------------------------------
+// 8. DEBT & LOAN MODEL (Utang & Piutang)
+// ------------------------------------------------------
+model Debt {
+  id         Int        @id @default(autoincrement())
+  userId     Int        @map("user_id")
+  type       DebtType   // DEBT (Saya Utang) atau LOAN (Dia Utang/Piutang)
+  personName String     @map("person_name") @db.VarChar(100)
+  amount     Decimal    @db.Decimal(15, 2)
+  paidAmount Decimal    @default(0.00) @map("paid_amount") @db.Decimal(15, 2)
+  dueDate    DateTime?  @map("due_date")
+  status     DebtStatus @default(UNPAID)
+  walletId   Int?       @map("wallet_id")
+  notes      String?    @db.VarChar(255)
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet   Wallet?       @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  payments DebtPayment[]
+
+  @@map("debts")
+}
+
+model DebtPayment {
+  id          Int      @id @default(autoincrement())
+  debtId      Int      @map("debt_id")
+  walletId    Int      @map("wallet_id")
+  amount      Decimal  @db.Decimal(15, 2)
+  paymentDate DateTime @default(now()) @map("payment_date")
+  notes       String?  @db.VarChar(255)
+
+  debt   Debt   @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@map("debt_payments")
+}
+
+enum DebtType {
+  DEBT // Utang (Saya Utang ke Orang)
+  LOAN // Piutang (Orang Utang ke Saya)
+}
+
+enum DebtStatus {
+  UNPAID
+  PARTIAL
+  PAID
 }

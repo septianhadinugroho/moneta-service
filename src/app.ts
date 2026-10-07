@@ -12,6 +12,7 @@ import budgetRoutes from './routes/budgetRoutes.js';
 import reportRouter from './routes/reportRoutes.js';
 import goalRoutes from './routes/goalRoutes.js';
 import subscriptionRoutes from './routes/subscriptionRoutes.js';
+import debtRoutes from './routes/debtRoutes.js';
 
 dotenv.config();
 
@@ -72,6 +73,7 @@ app.use('/api/budgets', budgetRoutes);
 app.use('/api/reports', reportRouter);
 app.use('/api/goals', goalRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/debts', debtRoutes);
 
 // 6. 404 Handler untuk Route Tidak Ditemukan
 app.use((req: Request, res: Response) => {
