@@ -3,6 +3,33 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+// HELPER: Memastikan Kategori Sistem Utang/Piutang selalu ada
+const getSystemDebtCategory = async (
+  tx: any,
+  name: string,
+  type: 'INCOME' | 'EXPENSE',
+  icon: string,
+  color: string
+) => {
+  let category = await tx.category.findFirst({
+    where: { userId: null, name, type },
+  });
+
+  if (!category) {
+    category = await tx.category.create({
+      data: {
+        userId: null, // Kategori default system
+        name,
+        type,
+        icon,
+        color,
+      },
+    });
+  }
+
+  return category.id;
+};
+
 // 1. GET ALL DEBTS & LOANS (Dengan Summary)
 export const getDebts = async (req: Request, res: Response) => {
   try {
@@ -25,11 +52,10 @@ export const getDebts = async (req: Request, res: Response) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Ringkasan Total Utang & Piutang
     const allUserDebts = await prisma.debt.findMany({ where: { userId } });
-    
-    let totalLoanRemaining = 0; // Total Piutang Belum Terbayar
-    let totalDebtRemaining = 0; // Total Utang Belum Terbayar
+
+    let totalLoanRemaining = 0;
+    let totalDebtRemaining = 0;
 
     allUserDebts.forEach((item) => {
       const remaining = Number(item.amount) - Number(item.paidAmount);
@@ -59,29 +85,44 @@ export const createDebt = async (req: Request, res: Response) => {
     const userId = (req as any).user.id;
     const { type, personName, amount, dueDate, walletId, notes } = req.body;
 
-    if (!type || !personName || !amount || Number(amount) <= 0) {
+    if (!type || !personName || !amount || Number(amount) <= 0 || !walletId) {
       return res.status(400).json({
         success: false,
-        message: 'Tipe, nama pihak terkait, dan nominal valid wajib diisi',
+        message: 'Tipe, nama pihak terkait, nominal valid, dan dompet wajib diisi!',
       });
     }
 
     const numAmount = Number(amount);
 
-    // CEK DOMPET DI LUAR TRANSAKSI (SANGAT MEMPERCEPAT WAKTU TRANSAKSI)
-    if (walletId) {
-      const targetWallet = await prisma.wallet.findUnique({ where: { id: Number(walletId) } });
-      if (!targetWallet || targetWallet.userId !== userId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Dompet tidak ditemukan atau tidak valid',
-        });
-      }
+    const targetWallet = await prisma.wallet.findUnique({ where: { id: Number(walletId) } });
+    if (!targetWallet || targetWallet.userId !== userId) {
+      return res.status(400).json({ success: false, message: 'Dompet tidak ditemukan atau tidak valid' });
     }
 
-    // TRANSAKSI HANYA FOKUS PADA PENULISAN (WRITE)
     const result = await prisma.$transaction(
       async (tx) => {
+        const isLoan = type === 'LOAN';
+
+        const categoryId = isLoan
+          ? await getSystemDebtCategory(tx, 'Piutang', 'EXPENSE', 'HandCoins', '#10b981')
+          : await getSystemDebtCategory(tx, 'Utang', 'INCOME', 'HandCoins', '#3b82f6');
+
+        await tx.wallet.update({
+          where: { id: Number(walletId) },
+          data: { balance: isLoan ? { decrement: numAmount } : { increment: numAmount } },
+        });
+
+        const newTx = await tx.transaction.create({
+          data: {
+            userId,
+            walletId: Number(walletId),
+            categoryId,
+            amount: numAmount,
+            type: isLoan ? 'EXPENSE' : 'INCOME',
+            description: isLoan ? `Pinjaman diberikan ke ${personName}` : `Pinjaman diterima dari ${personName}`,
+          },
+        });
+
         const newDebt = await tx.debt.create({
           data: {
             userId,
@@ -89,60 +130,18 @@ export const createDebt = async (req: Request, res: Response) => {
             personName,
             amount: numAmount,
             dueDate: dueDate ? new Date(dueDate) : null,
-            walletId: walletId ? Number(walletId) : null,
+            walletId: Number(walletId),
+            transactionId: newTx.id,
             notes,
           },
         });
 
-        if (walletId) {
-          if (type === 'LOAN') {
-            // Memberi Pinjaman ke Orang -> Saldo Dompet Berkurang (EXPENSE)
-            await tx.wallet.update({
-              where: { id: Number(walletId) },
-              data: { balance: { decrement: numAmount } },
-            });
-
-            await tx.transaction.create({
-              data: {
-                userId,
-                walletId: Number(walletId),
-                amount: numAmount,
-                type: 'EXPENSE',
-                description: `Pinjaman diberikan ke ${personName}`,
-              },
-            });
-          } else if (type === 'DEBT') {
-            // Menerima Pinjaman dari Orang -> Saldo Dompet Bertambah (INCOME)
-            await tx.wallet.update({
-              where: { id: Number(walletId) },
-              data: { balance: { increment: numAmount } },
-            });
-
-            await tx.transaction.create({
-              data: {
-                userId,
-                walletId: Number(walletId),
-                amount: numAmount,
-                type: 'INCOME',
-                description: `Pinjaman diterima dari ${personName}`,
-              },
-            });
-          }
-        }
-
         return newDebt;
       },
-      {
-        maxWait: 10000, // Maksimal tunggu koneksi 10 detik
-        timeout: 15000,  // Maksimal waktu eksekusi transaksi 15 detik
-      }
+      { maxWait: 10000, timeout: 15000 }
     );
 
-    return res.status(201).json({
-      success: true,
-      message: 'Catatan utang/piutang berhasil dibuat',
-      data: result,
-    });
+    return res.status(201).json({ success: true, message: 'Catatan berhasil dibuat', data: result });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -157,134 +156,153 @@ export const payDebt = async (req: Request, res: Response) => {
 
     const payVal = Number(amount);
     if (!payVal || payVal <= 0 || !walletId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nominal pembayaran dan dompet wajib diisi',
-      });
+      return res.status(400).json({ success: false, message: 'Nominal & dompet wajib diisi' });
     }
 
-    // PENGECEKAN KELAYAKAN DI LUAR TRANSAKSI
     const debt = await prisma.debt.findUnique({ where: { id: debtId } });
     if (!debt || debt.userId !== userId) {
-      return res.status(404).json({ success: false, message: 'Data utang/piutang tidak ditemukan' });
+      return res.status(404).json({ success: false, message: 'Utang/piutang tidak ditemukan' });
     }
 
-    const remaining = Number(debt.amount) - Number(debt.paidAmount);
-    if (payVal > remaining) {
-      return res.status(400).json({
-        success: false,
-        message: `Nominal bayar melebihi sisa kewajiban (${remaining})`,
-      });
-    }
-
-    const targetWallet = await prisma.wallet.findUnique({ where: { id: Number(walletId) } });
-    if (!targetWallet || targetWallet.userId !== userId) {
-      return res.status(400).json({ success: false, message: 'Dompet tidak valid' });
-    }
-
-    // BLOK TRANSAKSI PENULISAN DENGAN TIMEOUT DISESUAIKAN
     await prisma.$transaction(
       async (tx) => {
-        // 1. Buat Record Pembayaran DebtPayment
+        const isLoan = debt.type === 'LOAN';
+
+        const categoryId = isLoan
+          ? await getSystemDebtCategory(tx, 'Pelunasan Piutang', 'INCOME', 'HandCoins', '#10b981')
+          : await getSystemDebtCategory(tx, 'Pembayaran Utang', 'EXPENSE', 'HandCoins', '#f43f5e');
+
+        await tx.wallet.update({
+          where: { id: Number(walletId) },
+          data: { balance: isLoan ? { increment: payVal } : { decrement: payVal } },
+        });
+
+        const newTx = await tx.transaction.create({
+          data: {
+            userId,
+            walletId: Number(walletId),
+            categoryId,
+            amount: payVal,
+            type: isLoan ? 'INCOME' : 'EXPENSE',
+            description: isLoan
+              ? `Pelunasan piutang dari ${debt.personName}${notes ? ` (${notes})` : ''}`
+              : `Pembayaran utang ke ${debt.personName}${notes ? ` (${notes})` : ''}`,
+          },
+        });
+
         await tx.debtPayment.create({
           data: {
             debtId,
             walletId: Number(walletId),
+            transactionId: newTx.id,
             amount: payVal,
             notes,
           },
         });
 
-        // 2. Update Status & Paid Amount pada Debt
         const newPaidAmount = Number(debt.paidAmount) + payVal;
         const isFullyPaid = newPaidAmount >= Number(debt.amount);
-        const newStatus = isFullyPaid ? 'PAID' : 'PARTIAL';
 
         await tx.debt.update({
           where: { id: debtId },
           data: {
             paidAmount: newPaidAmount,
-            status: newStatus,
+            status: isFullyPaid ? 'PAID' : 'PARTIAL',
           },
         });
-
-        // 3. Update Saldo Dompet & Catat Transaksi
-        if (debt.type === 'LOAN') {
-          // Menerima Pelunasan Piutang -> Saldo Bertambah (INCOME)
-          await tx.wallet.update({
-            where: { id: Number(walletId) },
-            data: { balance: { increment: payVal } },
-          });
-
-          await tx.transaction.create({
-            data: {
-              userId,
-              walletId: Number(walletId),
-              amount: payVal,
-              type: 'INCOME',
-              description: `Pelunasan piutang dari ${debt.personName}${notes ? ` (${notes})` : ''}`,
-            },
-          });
-        } else if (debt.type === 'DEBT') {
-          // Membayar Utang Kita -> Saldo Berkurang (EXPENSE)
-          await tx.wallet.update({
-            where: { id: Number(walletId) },
-            data: { balance: { decrement: payVal } },
-          });
-
-          await tx.transaction.create({
-            data: {
-              userId,
-              walletId: Number(walletId),
-              amount: payVal,
-              type: 'EXPENSE',
-              description: `Pembayaran utang ke ${debt.personName}${notes ? ` (${notes})` : ''}`,
-            },
-          });
-        }
       },
-      {
-        maxWait: 10000,
-        timeout: 15000,
-      }
+      { maxWait: 10000, timeout: 15000 }
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Pembayaran berhasil dicatat dan saldo dompet telah diperbarui',
-    });
+    return res.status(200).json({ success: true, message: 'Pembayaran berhasil dicatat' });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// 4. UPDATE DEBT
+// 4. UPDATE DEBT (Revert Saldo Lama + Apply Saldo Dompet Baru)
 export const updateDebt = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id;
     const debtId = Number(req.params.id);
-    const { personName, amount, dueDate, walletId, notes } = req.body;
+    const { personName, amount, dueDate, walletId, notes, type } = req.body;
 
-    const debt = await prisma.debt.findUnique({ where: { id: debtId } });
+    const debt = await prisma.debt.findUnique({
+      where: { id: debtId },
+    });
+
     if (!debt || debt.userId !== userId) {
-      return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
+      return res.status(404).json({ success: false, message: 'Data utang/piutang tidak ditemukan' });
     }
 
-    const updated = await prisma.debt.update({
-      where: { id: debtId },
-      data: {
-        personName,
-        amount: amount ? Number(amount) : undefined,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        walletId: walletId ? Number(walletId) : null,
-        notes,
+    const newAmount = amount ? Number(amount) : Number(debt.amount);
+    const newWalletId = walletId ? Number(walletId) : debt.walletId;
+    const newType = type || debt.type;
+
+    await prisma.$transaction(
+      async (tx) => {
+        // 1. REVERT SALDO DOMPET LAMA (JIKA ADA TRANSAKSI AWAL)
+        if (debt.transactionId) {
+          const oldTx = await tx.transaction.findUnique({ where: { id: debt.transactionId } });
+          if (oldTx) {
+            const rollbackOld = oldTx.type === 'INCOME' ? -Number(oldTx.amount) : Number(oldTx.amount);
+            await tx.wallet.update({
+              where: { id: oldTx.walletId },
+              data: { balance: { increment: rollbackOld } },
+            });
+          }
+        }
+
+        // 2. POTONG/TAMBAH SALDO DOMPET BARU
+        if (newWalletId) {
+          const isLoan = newType === 'LOAN';
+          const newBalanceChange = isLoan ? -newAmount : newAmount;
+
+          await tx.wallet.update({
+            where: { id: newWalletId },
+            data: { balance: { increment: newBalanceChange } },
+          });
+
+          // UPDATE RECORD TRANSAKSI TERIKAT
+          if (debt.transactionId) {
+            const categoryId = isLoan
+              ? await getSystemDebtCategory(tx, 'Piutang', 'EXPENSE', 'HandCoins', '#10b981')
+              : await getSystemDebtCategory(tx, 'Utang', 'INCOME', 'HandCoins', '#3b82f6');
+
+            await tx.transaction.update({
+              where: { id: debt.transactionId },
+              data: {
+                walletId: newWalletId,
+                categoryId,
+                amount: newAmount,
+                type: isLoan ? 'EXPENSE' : 'INCOME',
+                description: isLoan ? `Pinjaman diberikan ke ${personName}` : `Pinjaman diterima dari ${personName}`,
+              },
+            });
+          }
+        }
+
+        // 3. UPDATE DATA UTANG/PIUTANG
+        const updated = await tx.debt.update({
+          where: { id: debtId },
+          data: {
+            type: newType,
+            personName,
+            amount: newAmount,
+            dueDate: dueDate ? new Date(dueDate) : null,
+            walletId: newWalletId,
+            notes,
+          },
+        });
+
+        return updated;
       },
-    });
+      { maxWait: 10000, timeout: 15000 }
+    );
 
     return res.status(200).json({
       success: true,
-      message: 'Catatan berhasil diperbarui',
-      data: updated,
+      message: 'Catatan utang/piutang dan saldo dompet berhasil diperbarui',
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -297,7 +315,6 @@ export const deleteDebt = async (req: Request, res: Response) => {
     const userId = (req as any).user.id;
     const debtId = Number(req.params.id);
 
-    // Ambil data utang beserta riwayat cicilan/pembayarannya
     const debt = await prisma.debt.findUnique({
       where: { id: debtId },
       include: { payments: true },
@@ -309,68 +326,38 @@ export const deleteDebt = async (req: Request, res: Response) => {
 
     await prisma.$transaction(
       async (tx) => {
-        // A. REVERT SALDO DARI PEMBUATAN AWAL UTANG/PIUTANG
-        if (debt.walletId) {
-          if (debt.type === 'LOAN') {
-            // Dulu Piutang memotong saldo -> Saat dihapus, kembalikan saldo (INCREMENT)
+        if (debt.transactionId) {
+          const mainTx = await tx.transaction.findUnique({ where: { id: debt.transactionId } });
+          if (mainTx) {
+            const rollbackAmount = mainTx.type === 'INCOME' ? -Number(mainTx.amount) : Number(mainTx.amount);
             await tx.wallet.update({
-              where: { id: debt.walletId },
-              data: { balance: { increment: Number(debt.amount) } },
+              where: { id: mainTx.walletId },
+              data: { balance: { increment: rollbackAmount } },
             });
-          } else if (debt.type === 'DEBT') {
-            // Dulu Utang menambah saldo -> Saat dihapus, kurangi saldo kembali (DECREMENT)
-            await tx.wallet.update({
-              where: { id: debt.walletId },
-              data: { balance: { decrement: Number(debt.amount) } },
-            });
+            await tx.transaction.delete({ where: { id: mainTx.id } });
           }
         }
 
-        // B. REVERT SALDO DARI SETIAP CICILAN/PELUNASAN YANG PERNAH DILAKUKAN
         for (const payment of debt.payments) {
-          if (debt.type === 'LOAN') {
-            // Cicilan piutang dulu menambah saldo -> Kurangi kembali
-            await tx.wallet.update({
-              where: { id: payment.walletId },
-              data: { balance: { decrement: Number(payment.amount) } },
-            });
-          } else if (debt.type === 'DEBT') {
-            // Cicilan utang dulu memotong saldo -> Kembalikan kembali
-            await tx.wallet.update({
-              where: { id: payment.walletId },
-              data: { balance: { increment: Number(payment.amount) } },
-            });
+          if (payment.transactionId) {
+            const payTx = await tx.transaction.findUnique({ where: { id: payment.transactionId } });
+            if (payTx) {
+              const rollbackAmount = payTx.type === 'INCOME' ? -Number(payTx.amount) : Number(payTx.amount);
+              await tx.wallet.update({
+                where: { id: payTx.walletId },
+                data: { balance: { increment: rollbackAmount } },
+              });
+              await tx.transaction.delete({ where: { id: payTx.id } });
+            }
           }
         }
 
-        // C. HAPUS TRANSAKSI OTOMATIS YANG TERKAIAT DENGAN UTANG/PIUTANG INI
-        // (Menghapus riwayat transaksi dengan deskripsi mengandung nama pihak terkait)
-        const matchKeyword = debt.personName;
-        await tx.transaction.deleteMany({
-          where: {
-            userId,
-            OR: [
-              { description: { contains: `ke ${matchKeyword}` } },
-              { description: { contains: `dari ${matchKeyword}` } },
-            ],
-          },
-        });
-
-        // D. HAPUS DATA UTANG & PAYMENT-NYA (CASCADE)
-        await tx.debt.delete({
-          where: { id: debtId },
-        });
+        await tx.debt.delete({ where: { id: debtId } });
       },
-      {
-        maxWait: 10000,
-        timeout: 15000,
-      }
+      { maxWait: 10000, timeout: 15000 }
     );
 
-    return res.status(200).json({
-      success: true,
-      message: 'Catatan utang/piutang berhasil dihapus, saldo dompet dan riwayat transaksi telah dikembalikan',
-    });
+    return res.status(200).json({ success: true, message: 'Catatan utang/piutang berhasil dihapus' });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

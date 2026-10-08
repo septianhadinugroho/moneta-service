@@ -271,7 +271,7 @@ export const updateTransaction = async (req: Request, res: Response): Promise<vo
   }
 };
 
-// 4. DELETE TRANSACTION (DENGAN ROLLBACK KANONIK & SINKRONISASI UTANG/TAGIHAN)
+// 4. DELETE TRANSACTION (DENGAN CASCADE ROLLBACK KELOMPOK UTANG/PIUTANG)
 export const deleteTransaction = async (req: Request, res: Response): Promise<void> => {
   const userId = (req as any).user.id;
   const { id } = req.params;
@@ -280,7 +280,17 @@ export const deleteTransaction = async (req: Request, res: Response): Promise<vo
   try {
     const transaction: any = await prisma.transaction.findFirst({
       where: { id: txId, userId },
-      include: { subscriptionPayment: true },
+      include: {
+        subscriptionPayment: true,
+        debtInitial: {
+          include: {
+            payments: {
+              include: { transaction: true }
+            }
+          }
+        },
+        debtPayment: { include: { debt: true } },
+      },
     });
 
     if (!transaction) {
@@ -293,13 +303,47 @@ export const deleteTransaction = async (req: Request, res: Response): Promise<vo
 
     await prisma.$transaction(
       async (tx) => {
-        // STEP 1: ROLLBACK SALDO DOMPET BERDASARKAN TIPE
+        // A. JIKA TRANSAKSI INI ADALAH PEMBUATAN UTANG/PIUTANG AWAL -> REVERT TOTAL KELOMPOK
+        if (transaction.debtInitial) {
+          const debt = transaction.debtInitial;
+
+          // 1. Rollback & Hapus Semua Transaksi Cicilan
+          for (const payment of debt.payments) {
+            if (payment.transaction) {
+              const payTx = payment.transaction;
+              const payRollback = payTx.type === 'INCOME' ? -Number(payTx.amount) : Number(payTx.amount);
+              
+              await tx.wallet.update({
+                where: { id: payTx.walletId },
+                data: { balance: { increment: payRollback } },
+              });
+
+              await tx.transaction.delete({ where: { id: payTx.id } });
+            }
+          }
+
+          // 2. Rollback Saldo Transaksi Awal
+          const mainRollback = txType === 'INCOME' ? -parsedAmount : parsedAmount;
+          await tx.wallet.update({
+            where: { id: transaction.walletId },
+            data: { balance: { increment: mainRollback } },
+          });
+
+          // 3. Hapus Data Utama Debt (DebtPayment terhapus otomatis via Cascade DB)
+          await tx.debt.delete({ where: { id: debt.id } });
+
+          // 4. Hapus Transaksi Utama
+          await tx.transaction.delete({ where: { id: txId } });
+
+          return;
+        }
+
+        // B. ROLLBACK SALDO BIASA / TRANSFER
         if (txType === 'TRANSFER') {
           await tx.wallet.update({
             where: { id: transaction.walletId },
             data: { balance: { increment: parsedAmount } },
           });
-
           if (transaction.destinationWalletId) {
             await tx.wallet.update({
               where: { id: transaction.destinationWalletId },
@@ -314,27 +358,17 @@ export const deleteTransaction = async (req: Request, res: Response): Promise<vo
           });
         }
 
-        // STEP 2: REVERT TAGIHAN RUTIN (JIKA ADA RECORD SUBSCRIPTION PAYMENT)
+        // C. REVERT TAGIHAN RUTIN (SUBSCRIPTION)
         if (transaction.subscriptionPayment) {
           await tx.subscriptionPayment.delete({
             where: { id: transaction.subscriptionPayment.id },
           });
         }
 
-        // STEP 3: REVERT UTANG / PIUTANG (JIKA ADA RECORD DEBT PAYMENT)
-        // Cari DebtPayment yang terikat dengan transaksi ini berdasarkan wallet, amount, dan waktu
-        const relatedDebtPayment = await tx.debtPayment.findFirst({
-          where: {
-            walletId: transaction.walletId,
-            amount: transaction.amount,
-          },
-          orderBy: { paymentDate: 'desc' },
-          include: { debt: true },
-        });
-
-        if (relatedDebtPayment && relatedDebtPayment.debt) {
-          const debt = relatedDebtPayment.debt;
-          const newPaidAmount = Math.max(0, Number(debt.paidAmount) - Number(relatedDebtPayment.amount));
+        // D. REVERT CICILAN TUNGGAL UTANG/PIUTANG
+        if (transaction.debtPayment && transaction.debtPayment.debt) {
+          const debt = transaction.debtPayment.debt;
+          const newPaidAmount = Math.max(0, Number(debt.paidAmount) - Number(transaction.debtPayment.amount));
           const newStatus = newPaidAmount <= 0 ? 'UNPAID' : 'PARTIAL';
 
           await tx.debt.update({
@@ -346,24 +380,21 @@ export const deleteTransaction = async (req: Request, res: Response): Promise<vo
           });
 
           await tx.debtPayment.delete({
-            where: { id: relatedDebtPayment.id },
+            where: { id: transaction.debtPayment.id },
           });
         }
 
-        // STEP 4: HAPUS TRANSAKSI DARI DATABASE
+        // E. HAPUS TRANSAKSI
         await tx.transaction.delete({
           where: { id: txId },
         });
       },
-      {
-        maxWait: 10000,
-        timeout: 15000,
-      }
+      { maxWait: 10000, timeout: 15000 }
     );
 
     res.status(200).json({
       success: true,
-      message: 'Transaksi berhasil dihapus & status terkait (tagihan/utang) telah dikembalikan',
+      message: 'Transaksi dan seluruh siklus data terkait berhasil dibersihkan',
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
